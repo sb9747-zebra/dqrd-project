@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Jira Epic Analyzer | Zebra Technologies</title>
+    <link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <header class="header">
+      <div class="header-content">
+        <div class="logo">
+          <a href="https://www.zebra.com" target="_blank" rel="noopener noreferrer" class="logo-link">
+            <img src="assets/zebra-logo.jpg" alt="Zebra Technologies" class="logo-img" />
+            <span>Zebra Technologies</span>
+          </a>
+        </div>
+        <nav class="main-nav">
+          <a href="index.html" class="nav-link">Home</a>
+          <a href="analyzer.html" class="nav-link active">Analyzer</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <section class="analyzer-hero">
+        <div class="container">
+          <h1>Jira Epic Analyzer</h1>
+          <p class="section-subtitle">Assess epic readiness and get actionable insights</p>
+        </div>
+      </section>
+
+      <section class="analyzer-content">
+        <div class="container">
+          <div class="analyzer-card">
+            <div class="analyzer-header">
+              <h2>Analyze Your Feature</h2>
+            </div>
+
+            <form id="analyzerForm" class="analyzer-form">
+              <div class="form-group">
+                <label for="epicIdInput">Epic ID (e.g., DQRD-10393)</label>
+                <input
+                  id="epicIdInput"
+                  name="epicId"
+                  type="text"
+                  placeholder="Enter Epic ID"
+                  required
+                  autocomplete="off"
+                />
+              </div>
+
+              <button id="analyzeBtn" type="submit" class="btn btn-primary btn-full">
+                ANALYZE FEATURE
+              </button>
+
+              <div id="analysisResult" class="analysis-result" role="status" aria-live="polite"></div>
+
+              <div id="loadingSpinner" class="loading-spinner" style="display: none">
+                <div class="spinner"></div>
+                <p>Analyzing your epic...</p>
+              </div>
+            </form>
+
+            <!-- Results Summary Section -->
+            <div id="resultsSection" class="results-section">
+              <div class="results-header">
+                <h3>📊 Readiness Analysis Results</h3>
+              </div>
+              <div class="results-content">
+                <div id="summaryGrid" class="summary-grid"></div>
+
+                <div id="exceptionsSection" class="exceptions-section">
+                  <div class="exceptions-header">⚠️ Readiness Exceptions</div>
+                  <div id="exceptionsList"></div>
+                </div>
+              </div>
+
+              <!-- Action Buttons Section -->
+              <div class="action-buttons">
+                <button id="downloadBtn" class="btn btn-download" style="display: none;">
+                  📥 DOWNLOAD REPORT
+                </button>
+                <button id="analyzeAgainBtn" class="btn btn-analyze-again" style="display: none;">
+                  🔄 ANALYZE ANOTHER EPIC
+                </button>
+              </div>
+            </div>
+          </div>
+
+
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>&copy; 2026 Zebra Technologies. All rights reserved.</p>
+    </footer>
+
+    <script src="js/main.js"></script>
+    <script src="js/analyzer.js"></script>
+  </body>
+</html>

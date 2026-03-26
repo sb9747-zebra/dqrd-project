@@ -1,0 +1,349 @@
+================================================================================
+JIRA EPIC FETCHER - CODE ARCHITECTURE & OPERATION SUMMARY
+================================================================================
+
+PROJECT OVERVIEW:
+The Jira Epic Fetcher is a Python tool that extracts and analyzes Jira epic 
+information, including all child issues and their "High Level Status" tables. 
+It performs readiness analysis on tasks and generates comprehensive Excel 
+reports with color-coded visualizations.
+
+================================================================================
+KEY TERMINOLOGIES:
+================================================================================
+
+1. JIRA REST API:
+   - RESTful API used to communicate with Jira server
+   - Base endpoint format: {JIRA_BASE_URL}/rest/api/2/
+   - Authentication: Bearer token (PAT - Personal Access Token) in headers
+   - All responses are JSON-formatted
+
+2. EPIC:
+   - A Jira issue type that groups related work
+   - Parent issue that contains multiple child issues
+   - Used to organize large projects or releases
+
+3. ISSUE:
+   - Individual work item in Jira
+   - Contains fields: key, summary, status, assignee, reporter, etc.
+   - Custom fields store additional metadata
+
+4. HIGH LEVEL STATUS (HLS) TABLE:
+   - A table grid/matrix field within Jira issues
+   - Contains readiness metrics for dependent systems
+   - Plugin: Jira Table Grid (stores structured table data)
+   - Rows represent different components/areas
+   - Columns: Component Name, Status/Expected, Actual Status, Pass Metric
+
+5. PASS METRIC:
+   - Expected/required status for a readiness row
+   - Compared against actual status to determine readiness
+   - Can be ticket references (SCM-*, SRM-*, PO-*), text phrases, or thresholds
+
+6. CUSTOM FIELDS:
+   - User-defined fields in Jira (id format: customfield_12345)
+   - Examples: Epic Link, High Level Status, Table Grid fields
+   - Identified by matching field names in field definitions
+
+7. JQL (Jira Query Language):
+   - Query language for searching Jira issues
+   - Used to find all child issues of an epic
+   - Supports: key matching, parent/epic relationships, field filters
+
+================================================================================
+DATA FETCHING FLOW:
+================================================================================
+
+STEP 1: INITIALIZATION
+ ├─ Load environment variables (JIRA_BASE_URL, JIRA_PAT from .env file)
+ └─ Create JiraClient with Bearer authentication headers
+
+STEP 2: FETCH FIELD DEFINITIONS
+ ├─ GET {BASE_URL}/rest/api/2/field
+ ├─ Response: List of all Jira field objects
+ ├─ Extract field IDs for:
+ │  ├─ Epic Link (custom field for epic relationships)
+ │  ├─ High Level Status (business readiness table)
+ │  └─ Table Grid Fields (any table grid custom fields)
+ └─ Store field IDs for later queries
+
+STEP 3: FETCH EPIC DETAILS
+ ├─ GET {BASE_URL}/rest/api/2/issue/{EPIC_KEY}
+ ├─ Query specific fields: summary, status, description, assignee, etc.
+ ├─ Response: Epic issue object with full metadata
+ └─ Extract description (handles both text and ADF format)
+
+STEP 4: FIND EPIC CHILD ISSUES
+ ├─ JQL Query 1: "Epic Link" = {EPIC_KEY} ORDER BY key
+ ├─ JQL Query 2: parent = {EPIC_KEY} ORDER BY key
+ ├─ JQL Query 3: cf[CUSTOM_FIELD_ID] = {EPIC_KEY} (if custom field found)
+ ├─ POST {BASE_URL}/rest/api/2/search with JQL
+ ├─ Pagination: startAt=0, maxResults=100 (loop until complete)
+ └─ Deduplicate results by issue key
+
+STEP 5: FETCH FULL ISSUE DATA FOR EACH CHILD
+ ├─ GET {BASE_URL}/rest/api/2/issue/{ISSUE_KEY} (fetch all fields)
+ ├─ Extract High Level Status table from custom fields
+ ├─ Three strategies for extracting HLS tables:
+ │  ├─ Strategy 1A: Direct field value (structured or wiki markup)
+ │  ├─ Strategy 1B: Table Grid REST API
+ │  │   GET {BASE_URL}/rest/jira-tablegrid/1.0/table/{ISSUE_ID}/{FIELD_ID}
+ │  └─ Strategy 2: Scan all custom fields for table-like structures
+ │
+ └─ Return: (context_text, table_rows)
+    context_text = surrounding descriptive text/statements
+    table_rows = list of dictionaries (each row = dict of column values)
+
+================================================================================
+TABLE GRID DATA EXTRACTION:
+================================================================================
+
+ADF (Atlassian Document Format) PARSING:
+ ├─ Jira Cloud uses ADF for rich text fields
+ ├─ ADF is hierarchical JSON structure with node types
+ ├─ Table nodes contain "content" array of table rows
+ ├─ Table rows contain cell nodes (tableHeader or tableCell)
+ ├─ Recursively walk ADF tree to extract text content
+ └─ Clean text: strip markup (bold, italic, links) and normalize
+
+WIKI MARKUP TABLE PARSING:
+ ├─ Jira Server/Data Center use wiki markup
+ ├─ Table format: | Header 1 | Header 2 |
+ │                | Cell 1   | Cell 2   |
+ ├─ Parse pipe-delimited rows
+ ├─ First row = headers, subsequent rows = data
+ └─ Also extract context text (statements above/below table)
+
+FLATTENING ROWS:
+ ├─ Nested table structures → flat dictionaries
+ ├─ Handle merged cells by repeating values
+ ├─ Each row becomes dict: {column_name: cell_value, ...}
+ └─ Preserve column order from first row
+
+================================================================================
+PATTERN MATCHING & READINESS ANALYSIS:
+================================================================================
+
+PHASE 1: TEXT NORMALIZATION
+ ├─ Convert to lowercase
+ ├─ Remove extra whitespace
+ ├─ Strip special characters and Jira markup
+ ├─ Result: normalized comparable form
+
+PHASE 2: CLASSIFY TEXT AS PASS/FAIL/NEUTRAL
+ ├─ Check for N/A expressions: "na", "n/a", "not applicable"
+ │  └─ Classification: PASS (always considered ready)
+ │
+ ├─ Check against PASSING_PHRASES:
+ │  ├─ "ready to release", "approved", "pass", "passed", "done"
+ │  ├─ "completed", "complete", "reviewed", "hotfix provided"
+ │  ├─ "not required", "not requested", "not needed", "not necessary"
+ │  ├─ "no update necessary", "still apply", "no change needed"
+ │  ├─ "na", "n/a", "yes"
+ │  ├─ "no cfa", "no one page"
+ │  └─ Classification: PASS
+ │
+ ├─ Check against FAILING_PHRASES:
+ │  ├─ "not ready", "failed", "fail", "actively debugging", "debugging"
+ │  ├─ "field testing", "blocked", "pending", "in progress", "open"
+ │  ├─ "waiting", "hold", "risk", "rejected", "deferred"
+ │  └─ Classification: FAIL
+ │
+ └─ If none match: Classification: NEUTRAL (informational)
+
+PHASE 3: PASS METRIC MATCHING (if both Status & Pass Metric columns exist)
+ ├─ Split pass_metric by delimiters: / , ; or "or" keyword
+ ├─ Split actual_status similarly for option values
+ │
+ ├─ RULE 1: Exact normalized match
+ │  └─ normalized_actual IN metric_values → PASS
+ │
+ ├─ RULE 2: Pass-like classification
+ │  └─ If actual classifies as PASS and metric expects PASS → PASS
+ │
+ ├─ RULE 3: Composite status options
+ │  └─ If actual has multiple options, all in metric_values → PASS
+ │
+ ├─ RULE 4: SCM/SRM/PO Ticket References
+ │  ├─ Pattern: ^[A-Z][A-Z0-9]+-\d+$
+ │  ├─ Special handling: SCM-*, SRM-*, PO-* tickets
+ │  │  └─ Always PASS (treated as approved/valid)
+ │  └─ Other tickets: only PASS if metric says "ticket created"
+ │
+ ├─ RULE 5: Threshold Comparisons
+ │  ├─ Pattern in metric: > threshold, >= threshold, < threshold, etc.
+ │  ├─ Extract numeric value from actual_status (%, hours, plain number)
+ │  ├─ Compare: actual_value OP threshold_value
+ │  └─ PASS if comparison is true
+ │
+ ├─ RULE 6: Specific phrase matching
+ │  ├─ "approved" status + "approved" metric phrases → PASS
+ │  ├─ "ready to release" status + matching metric → PASS
+ │  ├─ "yes" status + "pass" metric → PASS
+ │  └─ Similar pattern-based matching
+ │
+ └─ DEFAULT: Status does not satisfy pass metric → FAIL
+
+PHASE 4: OVERALL READINESS DETERMINATION
+ ├─ Context-based readiness:
+ │  ├─ If context text classifies as PASS and no table: READY
+ │  └─ Exception: If Jira status is "Open" → NEEDS ATTENTION
+ │
+ ├─ Table-based readiness:
+ │  ├─ For each row: pass_metric match against actual_status
+ │  ├─ Collect exceptions (rows that don't match)
+ │  ├─ Classify status if no pass_metric
+ │  └─ Overall: READY (0 exceptions), NEEDS ATTENTION (has exceptions)
+ │
+ ├─ Special cases:
+ │  ├─ No HLS table + Jira status "Done" → READY
+ │  ├─ No HLS table + Jira status not "Done" → NEEDS ATTENTION
+ │  └─ Error fetching issue → ERROR
+ │
+ └─ Output: IssueReadinessAnalysis object with detailed exception list
+
+================================================================================
+REGEX PATTERNS USED:
+================================================================================
+
+PASS_METRIC_SPLIT_RE:
+ Pattern: \s*(?:/|,|;|\bor\b|\n)\s*
+ Purpose: Split pass metrics by separators (/, comma, semicolon, "or", newline)
+ Example: "Pass / Done, Approved" → ["Pass", "Done", "Approved"]
+
+TICKET_REF_RE:
+ Pattern: ^[A-Z][A-Z0-9]+-\d+$
+ Purpose: Match Jira ticket references (e.g., DQRD-10393, SCM-30163)
+ Usage: Detect ticket IDs in status columns
+
+THRESHOLD_RE:
+ Pattern: ([<>]=?|=)\s*([0-9]*\.?[0-9]+)
+ Purpose: Extract threshold operators and values (e.g., ">= 95")
+ Groups: (1) operator [<>]=?|=, (2) numeric threshold
+
+ADF_TABLE_PATTERN (internal):
+ Match: node.type == "table"
+ Purpose: Locate table structures in Atlassian Document Format
+
+MARKUP_PATTERNS (cleanup):
+ Remove: Bold (**text**), Italic (*text*), Links, Jira markup
+ Purpose: Clean extracted text for analysis
+
+================================================================================
+EXCEL REPORT GENERATION:
+================================================================================
+
+SHEET 1: EPIC SUMMARY
+ ├─ Header: Epic key, title (green background)
+ ├─ Summary table: Epic metadata
+ │  ├─ Epic Key, Title, Type, Status, Assignee, Reporter
+ │  ├─ Created, Updated, Generated At timestamp, Description
+ └─ Formatting: Blue-gray background labels, text wrap, frozen panes
+
+SHEET 2: ISSUES IN EPIC
+ ├─ Columns: Issue Key, Type, Status, Assignee, Reporter, Created, Updated, Summary
+ ├─ One row per child issue
+ ├─ Include auto-filter and column auto-sizing
+ └─ Frozen header row
+
+SHEET 3: HIGH LEVEL STATUS
+ ├─ For each issue with HLS table:
+ │  ├─ Issue header row (merged columns, blue background)
+ │  ├─ Context text (green italic)
+ │  ├─ Table headers (white bold text, dark blue background)
+ │  └─ Table data rows (text wrap, thin borders)
+ │
+ └─ Spacing between issue tables
+
+SHEET 4: READINESS SUMMARY
+ ├─ Columns: Issue Key, Overall State, Exception Count, Issue Summary
+ ├─ Only issues with NEEDS ATTENTION state
+ ├─ Lists exceptions with details:
+ │  ├─ Row name, actual status, expected metric, reason
+ └─ Supports multiple exceptions per issue
+
+SHEET 5: READINESS EXCEPTIONS
+ ├─ Detailed exception log
+ ├─ Columns: Issue Key, Row Name, Pass Metric, Actual Status, Reason, Context
+ ├─ Color-coded by severity
+ └─ Full exception details for investigation
+
+FORMATTING APPLIED:
+ ├─ Header styling: white bold on dark blue (1F4E78)
+ ├─ Summary headers: bold on light blue (EAF3FA)
+ ├─ Frozen header rows and panes
+ ├─ Text wrapping on all cells
+ ├─ Column auto-sizing (min 12, max 60 chars)
+ ├─ Auto-filter on data areas
+ ├─ Thin borders on all table cells
+ └─ Date/time generation timestamp
+
+================================================================================
+AUTHENTICATION & ENVIRONMENT:
+================================================================================
+
+ENVIRONMENT VARIABLES (.env file):
+ ├─ JIRA_BASE_URL: Jira instance base URL (e.g., https://jira.company.com)
+ ├─ JIRA_PAT: Personal Access Token (Bearer token for authentication)
+ └─ Loaded from project root .env file if present
+
+JIRA CLIENT INITIALIZATION:
+ ├─ Creates requests.Session() with persistent connection pool
+ ├─ Adds headers:
+ │  ├─ Accept: application/json
+ │  ├─ Authorization: Bearer {PAT}
+ └─ Timeout: 30 seconds per request
+
+ERROR HANDLING:
+ ├─ HTTP errors raised with context
+ ├─ Response text captured (truncated to 300 chars)
+ ├─ Missing environment variables trigger RuntimeError
+ ├─ Invalid epic IDs raise RuntimeError
+ └─ Table extraction failures fallback gracefully
+
+================================================================================
+OUTPUT GENERATION MODES:
+================================================================================
+
+1. EXCEL REPORT (default):
+   └─ Generates XLSX file with all sheets, colors, and formatting
+
+2. CONSOLE OUTPUT:
+   ├─ Epic details (key, title, type, status, assignee, reporter, dates)
+   ├─ List of child issues with status and assignee
+   └─ Printed tables for quick terminal review
+
+3. READINESS SUMMARY:
+   ├─ Lists all issues needing attention
+   ├─ Shows exception count per issue
+   ├─ Details each exception with reason
+   └─ Highlights discrepancies in readiness metrics
+
+4. DEBUG OUTPUT:
+   ├─ Dumps raw Jira field definitions (JSON)
+   ├─ Shows full issue field data for first child
+   ├─ Identifies High Level Status field ID
+   └─ Saved to debug/{ISSUE_KEY}_fields.json
+
+5. WEB SERVER MODE:
+   ├─ Serves HTML frontend from /frontend directory
+   ├─ Provides REST endpoints for epic lookup
+   ├─ Browser-based analysis and report generation
+
+================================================================================
+KEY FEATURES:
+================================================================================
+
+✓ Multi-strategy table extraction (ADF, Wiki markup, Table Grid API)
+✓ Intelligent readiness analysis with 6+ matching rules
+✓ SCM/SRM/PO ticket auto-validation
+✓ Support for "no CFA" and "no one page" statements
+✓ Threshold-based numeric comparisons (%, hours, etc.)
+✓ Composite status option matching
+✓ Exception flagging and detailed reporting
+✓ Color-coded Excel workbooks with formatting
+✓ Pagination support for large issue sets (100+ per request)
+✓ Deduplication of epic child issues
+✓ Graceful error handling and fallbacks
+
+================================================================================
