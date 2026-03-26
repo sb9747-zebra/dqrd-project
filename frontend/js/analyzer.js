@@ -240,14 +240,18 @@ function displayResults(payload) {
 
     const detailCardsHtml = exceptions
       .map(
-        (exc) => `
-      <div class="exception-item" data-issue-key="${(exc.issue_key || '').trim()}">
-        <div class="exception-key">📌 ${exc.issue_key || 'Unknown'}</div>
+        (exc) => {
+          const key = (exc.issue_key || '').trim();
+          const issueUrl = jiraBaseUrl && key ? `${jiraBaseUrl}/browse/${encodeURIComponent(key)}` : '#';
+          return `
+      <div class="exception-item" data-issue-key="${key}">
+        <div class="exception-key">📌 <a class="exception-issue-link" href="${issueUrl}" target="_blank" rel="noopener noreferrer">${key || 'Unknown'}</a></div>
         <div class="exception-detail"><strong>Row:</strong> ${exc.row_name || 'Unknown'}</div>
         <div class="exception-detail"><strong>Expected:</strong> ${exc.pass_metric || 'N/A'}</div>
         <div class="exception-detail"><strong>Actual:</strong> ${exc.actual_status || 'N/A'}</div>
       </div>
-    `
+    `;
+        }
       )
       .join('');
 
