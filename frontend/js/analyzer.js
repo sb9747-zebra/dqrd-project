@@ -243,9 +243,25 @@ function displayResults(payload) {
         (exc) => {
           const key = (exc.issue_key || '').trim();
           const issueUrl = jiraBaseUrl && key ? `${jiraBaseUrl}/browse/${encodeURIComponent(key)}` : '#';
-          return `
+          const assigneeDisplay = exc.assignee_display ? escapeHtml(exc.assignee_display) : 'Unassigned';
+        const assigneeUsername = exc.assignee_username ? exc.assignee_username : '';
+        const assigneeAccountId = exc.assignee_account_id ? exc.assignee_account_id : '';
+
+        let assigneeProfileUrl = null;
+        if (jiraBaseUrl && assigneeUsername) {
+          assigneeProfileUrl = `${jiraBaseUrl}/secure/ViewProfile.jspa?name=${encodeURIComponent(assigneeUsername)}`;
+        } else if (jiraBaseUrl && assigneeAccountId) {
+          assigneeProfileUrl = `${jiraBaseUrl}/people/${encodeURIComponent(assigneeAccountId)}`;
+        }
+
+        const assigneeHtml = (assigneeProfileUrl && (assigneeUsername || assigneeAccountId))
+          ? `<a href="${assigneeProfileUrl}" target="_blank" rel="noopener noreferrer">${assigneeDisplay} (${escapeHtml(assigneeUsername || assigneeAccountId)})</a>`
+          : assigneeDisplay;
+
+        return `
       <div class="exception-item" data-issue-key="${key}">
         <div class="exception-key">📌 <a class="exception-issue-link" href="${issueUrl}" target="_blank" rel="noopener noreferrer">${key || 'Unknown'}</a></div>
+        <div class="exception-detail"><strong>Assignee:</strong> ${assigneeHtml}</div>
         <div class="exception-detail"><strong>Row:</strong> ${exc.row_name || 'Unknown'}</div>
         <div class="exception-detail"><strong>Expected:</strong> ${exc.pass_metric || 'N/A'}</div>
         <div class="exception-detail"><strong>Actual:</strong> ${exc.actual_status || 'N/A'}</div>

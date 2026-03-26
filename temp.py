@@ -51,6 +51,9 @@ class IssueReadinessAnalysis:
     total_rows: int
     exception_count: int
     exception_rows: list[ReadinessRowException]
+    assignee_display: str
+    assignee_username: str
+    assignee_account_id: str
 
 
 class JiraClient:
@@ -407,6 +410,7 @@ PASSING_PHRASES = (
     "completed",
     "complete",
     "reviewed",
+    "communicated",
     "hotfix provided",
     "not required",
     "not requested",
@@ -697,16 +701,26 @@ def _is_open_issue_status(status_value: str) -> bool:
 
 def _extract_numeric_value(value: str) -> float | None:
     text = _normalize_text(value)
+
+    # Prefer explicit unit or percent indicators first.
     for pattern in (
         r"([0-9]*\.?[0-9]+)\s*%",
         r"([0-9]*\.?[0-9]+)\s*(?:hrs?|hours?)\b",
-        r"([0-9]*\.?[0-9]+)",
     ):
         matches = _re.findall(pattern, text, flags=_re.IGNORECASE)
         if matches:
-            # Use the first numeric match found.
             return float(matches[0])
-    return None
+
+    # If multiple numeric values are present, choose the most likely one:
+    # - avoid interpreting embedded key prefixes (e.g. TC73)
+    # - use the largest numeric value as a heuristic for actual quantities.
+    matches = _re.findall(r"([0-9]*\.?[0-9]+)", text)
+    if not matches:
+        return None
+
+    numeric_values = [float(m) for m in matches]
+    # If there is a clear increase, prefer the max number (e.g. TC73 + 460.41)
+    return max(numeric_values)
 
 
 def _matches_pass_metric(pass_metric: str, actual_status: str) -> tuple[bool, str]:
@@ -723,6 +737,17 @@ def _matches_pass_metric(pass_metric: str, actual_status: str) -> tuple[bool, st
         return False, "Missing pass metric"
     if normalized_actual in metric_values:
         return True, "Exact pass metric match"
+
+    # Treat status variants like MV2 as equivalent to MV when MV is an acceptable pass metric.
+    base_actual = _re.sub(r"\d+$", "", normalized_actual)
+    if base_actual and base_actual != normalized_actual and base_actual in metric_values:
+        return True, f"{normalized_actual} treated as {base_actual} pass metric"
+
+    # Special case: Reviewed and Communicated semantics
+    if "communicated" in normalized_actual and any(
+        "reviewed" in mv or "communicated" in mv for mv in metric_values
+    ):
+        return True, "Communicated status treated as Reviewed/Communicated match"
 
     actual_state, actual_reason = _classify_readiness_text(actual_status)
     metric_states = {_classify_readiness_text(value)[0] for value in metric_values}
@@ -802,6 +827,9 @@ def analyze_issue_readiness(
     context_text: str,
     issue_status: str,
     table_rows: list[dict[str, str]],
+    assignee_display: str = "Unassigned",
+    assignee_username: str = "",
+    assignee_account_id: str = "",
 ) -> IssueReadinessAnalysis:
     exceptions: list[ReadinessRowException] = []
 
@@ -834,6 +862,9 @@ def analyze_issue_readiness(
                         reason="Context suggests ready, but Jira status is Open",
                     )
                 ],
+                assignee_display=assignee_display,
+                assignee_username=assignee_username,
+                assignee_account_id=assignee_account_id,
             )
         return IssueReadinessAnalysis(
             issue_key=issue_key,
@@ -844,6 +875,9 @@ def analyze_issue_readiness(
             total_rows=len(table_rows),
             exception_count=0,
             exception_rows=[],
+            assignee_display=assignee_display,
+            assignee_username=assignee_username,
+            assignee_account_id=assignee_account_id,
         )
 
     for row in table_rows:
@@ -905,6 +939,9 @@ def analyze_issue_readiness(
         total_rows=len(table_rows),
         exception_count=len(exceptions),
         exception_rows=exceptions,
+        assignee_display=assignee_display,
+        assignee_username=assignee_username,
+        assignee_account_id=assignee_account_id,
     )
 
 
@@ -1116,6 +1153,15 @@ def write_excel_report(
             issue_key = issue.get("key", "")
             issue_summary = issue.get("fields", {}).get("summary", "")
             issue_status = (issue.get("fields", {}).get("status") or {}).get("name", "")
+
+            assignee_obj = (issue.get("fields", {}) or {}).get("assignee")
+            assignee_display = format_user(assignee_obj)
+            assignee_username = ""
+            assignee_account_id = ""
+            if isinstance(assignee_obj, dict):
+                assignee_username = assignee_obj.get("name") or assignee_obj.get("key") or assignee_obj.get("accountId") or ""
+                assignee_account_id = assignee_obj.get("accountId") or ""
+
             if not issue_key:
                 continue
 
@@ -1136,6 +1182,9 @@ def write_excel_report(
                                 total_rows=0,
                                 exception_count=0,
                                 exception_rows=[],
+                                assignee_display=assignee_display,
+                                assignee_username=assignee_username,
+                                assignee_account_id=assignee_account_id,
                             )
                         )
                         continue
@@ -1160,13 +1209,25 @@ def write_excel_report(
                                     reason="Missing High Level Status table and Jira status is not Done",
                                 )
                             ],
+                            assignee_display=assignee_display,
+                            assignee_username=assignee_username,
+                            assignee_account_id=assignee_account_id,
                         )
                     )
                     continue
 
                 context_text, hls_table = hls_result
                 readiness_analyses.append(
-                    analyze_issue_readiness(issue_key, issue_summary, context_text, issue_status, hls_table)
+                    analyze_issue_readiness(
+                        issue_key,
+                        issue_summary,
+                        context_text,
+                        issue_status,
+                        hls_table,
+                        assignee_display=assignee_display,
+                        assignee_username=assignee_username,
+                        assignee_account_id=assignee_account_id,
+                    )
                 )
 
                 # Add issue header
@@ -1233,6 +1294,9 @@ def write_excel_report(
                         total_rows=0,
                         exception_count=0,
                         exception_rows=[],
+                        assignee_display=assignee_display,
+                        assignee_username=assignee_username,
+                        assignee_account_id=assignee_account_id,
                     )
                 )
 
@@ -1489,6 +1553,9 @@ def run_web_server(host: str, port: int) -> int:
                             "pass_metric": exc_row.pass_metric,
                             "actual_status": exc_row.actual_status,
                             "reason": exc_row.reason,
+                            "assignee_display": analysis.assignee_display,
+                            "assignee_username": analysis.assignee_username,
+                            "assignee_account_id": analysis.assignee_account_id,
                         })
 
                 ready_issue_keys = [
