@@ -1339,12 +1339,12 @@ def run_epic_report(
     console: bool = False,
     debug: bool = False,
     summary: bool = False,
-) -> tuple[Path, list[IssueReadinessAnalysis]]:
+) -> tuple[Path, list[IssueReadinessAnalysis], str, str, str]:
     project_root = Path(__file__).resolve().parent
     load_dotenv_file(project_root / ".env")
 
-    normalized_epic = epic_id.strip().upper()
-    if not normalized_epic:
+    normalized_input = epic_id.strip().upper()
+    if not normalized_input:
         raise RuntimeError("DQRD ID is required.")
 
     config = JiraConfig(
@@ -1352,8 +1352,8 @@ def run_epic_report(
         pat=get_env("JIRA_PAT"),
     )
     client = JiraClient(config)
-    epic = client.get_issue(normalized_epic)
 
+    # Load field definitions early so we can resolve an Epic Link from child issue input.
     hls_field_id = None
     table_field_ids: list[str] = []
     epic_link_field_id = None
@@ -1365,7 +1365,32 @@ def run_epic_report(
     except Exception:
         pass
 
-    children = find_epic_issues(client, normalized_epic, epic_link_field_id)
+    issue = client.get_issue_full(normalized_input)
+    issue_type = (issue.get("fields", {}).get("issuetype", {}).get("name") or "").strip().lower()
+    resolved_epic_id = normalized_input
+
+    if issue_type != "epic":
+        epic_link_value = None
+        if epic_link_field_id:
+            epic_link_value = issue.get("fields", {}).get(epic_link_field_id)
+        if not epic_link_value:
+            # fall back to scanning for a field that looks like Epic Link
+            for key, value in (issue.get("fields", {}) or {}).items():
+                if key.lower().startswith("customfield_") and isinstance(value, str) and value.upper().startswith("DQRD-"):
+                    epic_link_value = value
+                    break
+
+        if epic_link_value:
+            resolved_epic_id = str(epic_link_value).strip().upper()
+        else:
+            raise RuntimeError(
+                "Please enter a valid DQRD Epic ID, not a child issue ID. "
+                "(e.g., DQRD-10393)."
+            )
+
+    epic = client.get_issue(resolved_epic_id)
+    epic_name = str(epic.get("fields", {}).get("summary", resolved_epic_id) or resolved_epic_id)
+    children = find_epic_issues(client, resolved_epic_id, epic_link_field_id)
 
     if debug and children:
         first_key = children[0].get("key", "")
@@ -1391,13 +1416,13 @@ def run_epic_report(
         print_epic_children(children)
 
     if excel_path is None:
-        excel_path = Path("reports") / f"{normalized_epic}_REPORT.xlsx"
+        excel_path = Path("reports") / f"{resolved_epic_id}_REPORT.xlsx"
 
     readiness_analyses = write_excel_report(epic, children, excel_path, client, hls_field_id, table_field_ids)
     if summary:
         print_readiness_summary(readiness_analyses)
 
-    return excel_path, readiness_analyses
+    return excel_path, readiness_analyses, epic_name, resolved_epic_id, normalized_input
 
 
 def run_web_server(host: str, port: int) -> int:
@@ -1435,13 +1460,23 @@ def run_web_server(host: str, port: int) -> int:
                     )
                     return
 
-                excel_path, readiness_analyses = run_epic_report(epic_id=epic_id)
+                excel_path, readiness_analyses, epic_name, resolved_epic_id, requested_issue_id = run_epic_report(epic_id=epic_id)
                 
                 # Prepare readiness summary
                 total_issues = len(readiness_analyses)
                 ready_count = sum(1 for a in readiness_analyses if a.overall_state == "Ready")
                 attention_count = sum(1 for a in readiness_analyses if a.overall_state == "Needs Attention")
                 failed_count = sum(1 for a in readiness_analyses if a.overall_state == "Error")
+
+                ready_issues = [
+                    {
+                        "issue_key": a.issue_key,
+                        "issue_summary": a.issue_summary,
+                        "status": a.overall_state,
+                    }
+                    for a in readiness_analyses
+                    if a.overall_state == "Ready"
+                ]
                 
                 # Prepare exceptions
                 all_exceptions = []
@@ -1455,11 +1490,20 @@ def run_web_server(host: str, port: int) -> int:
                             "reason": exc_row.reason,
                         })
 
+                ready_issue_keys = [
+                    analysis.issue_key for analysis in readiness_analyses if analysis.overall_state == "Ready"
+                ]
+
+                # Use JIRA base URL from environment; avoid using an undefined local variable here.
+                jira_base_url = get_env("JIRA_BASE_URL")
+
                 self._send_json(
                     HTTPStatus.OK,
                     {
                         "ok": True,
-                        "epic_id": epic_id,
+                        "requested_issue_id": requested_issue_id,
+                        "epic_id": resolved_epic_id,
+                        "epic_name": epic_name,
                         "excel_path": str(excel_path.resolve()),
                         "message": "Excel report generated successfully.",
                         "readiness_summary": {
@@ -1468,6 +1512,9 @@ def run_web_server(host: str, port: int) -> int:
                             "attention_count": attention_count,
                             "failed_count": failed_count,
                         },
+                        "jira_base_url": jira_base_url,
+                        "ready_issue_keys": ready_issue_keys,
+                        "ready_issues": ready_issues,
                         "readiness_exceptions": all_exceptions[:50],  # Limit to 50 for UI
                     },
                 )
@@ -1560,7 +1607,7 @@ def main() -> int:
         else:
             excel_path = None
 
-        generated_path, _ = run_epic_report(
+        generated_path, _, _ = run_epic_report(
             epic_id=epic_id,
             excel_path=excel_path,
             console=args.console,

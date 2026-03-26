@@ -14,6 +14,16 @@ const analyzeAgainBtn = document.getElementById('analyzeAgainBtn');
 // Store the current excel path for download
 let currentExcelPath = null;
 
+function escapeHtml(value) {
+  const str = String(value);
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 if (analyzerForm && epicIdInput && analyzeBtn && analysisResult) {
   analyzerForm.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -29,6 +39,16 @@ if (analyzerForm && epicIdInput && analyzeBtn && analysisResult) {
     if (!epicId) {
       analysisResult.classList.add('error');
       analysisResult.textContent = '✗ Please enter an Epic ID (e.g., DQRD-10393).';
+      return;
+    }
+
+    // Validate input format
+    const epicPattern = /^DQRD-\d+$/i;
+    if (!epicPattern.test(epicId)) {
+      analysisResult.className = 'analysis-result';
+      analysisResult.classList.add('error');
+      analysisResult.textContent = '✗ Please enter the Epic ID in correct format as DQRD-XXXX (e.g., DQRD-10393).';
+      epicIdInput.focus();
       return;
     }
 
@@ -52,14 +72,26 @@ if (analyzerForm && epicIdInput && analyzeBtn && analysisResult) {
         throw new Error(payload.error || 'Failed to analyze epic.');
       }
 
+      // Show error for non-epic IDs
+      const totalIssues = payload.readiness_summary?.total_issues;
+      if (totalIssues === 0 || totalIssues === undefined) {
+        analysisResult.classList.add('error');
+        analysisResult.textContent = '✗ Please enter a valid DQRD Epic ID, not a child issue ID. (e.g., DQRD-10393)';
+        resultsSection.classList.remove('show');
+        return;
+      }
+
       // Display success message
       analysisResult.classList.add('success');
-      analysisResult.textContent = `✓ Epic analysis completed successfully!`;
-
-      // Display readiness results if available
-      if (payload.readiness_summary) {
-        displayResults(payload);
+      if (payload.requested_issue_id && payload.requested_issue_id !== payload.epic_id) {
+        analysisResult.textContent =
+          `✓ ${payload.requested_issue_id} is a child issue; associated epic is ${payload.epic_id} - ${payload.epic_name || 'Epic'}`;
+      } else {
+        analysisResult.textContent = `✓ ${payload.epic_id} - ${payload.epic_name || 'Epic'}`;
       }
+
+      // Display readiness results
+      displayResults(payload);
 
       // Store file path for download
       if (payload.excel_path) {
@@ -82,25 +114,102 @@ function displayResults(payload) {
   const summary = payload.readiness_summary;
   const exceptions = payload.readiness_exceptions || [];
 
-  // Display summary cards
+  // Display summary cards (exclude failed card per requirement)
   summaryGrid.innerHTML = `
     <div class="summary-card">
       <div class="summary-value">${summary.total_issues || 0}</div>
       <div class="summary-label">Total Issues</div>
     </div>
-    <div class="summary-card">
+    <div id="readySummaryCard" class="summary-card summary-card-clickable" style="cursor:pointer;">
       <div class="summary-value" style="color: #4caf50;">${summary.ready_count || 0}</div>
       <div class="summary-label">Ready</div>
     </div>
     <div class="summary-card">
       <div class="summary-value" style="color: #ff9800;">${summary.attention_count || 0}</div>
-      <div class="summary-label">Needs Attention</div>
-    </div>
-    <div class="summary-card">
-      <div class="summary-value" style="color: #f44336;">${summary.failed_count || 0}</div>
-      <div class="summary-label">Failed</div>
+      <div class="summary-label">Exception Findings</div>
     </div>
   `;
+
+  const readyIssues = payload.ready_issues || [];
+  const jiraBaseUrl = (payload.jira_base_url || '').replace(/\/$/, '');
+
+  const readyListSection = document.getElementById('readyListSection');
+  const readyIdsList = document.getElementById('readyIdsList');
+  const readyIdsTableContainer = document.getElementById('readyIdsTableContainer');
+  const epicNameLabel = document.getElementById('epicNameLabel');
+
+  if (epicNameLabel && payload.epic_name) {
+    epicNameLabel.textContent = `for ${payload.epic_name}`;
+  }
+
+  const buildReadyListHtml = () => {
+    if (!readyIssues.length) {
+      return '<div class="no-ready">No ready issues found.</div>';
+    }
+
+    return readyIssues
+      .map((issue) => {
+        const issueUrl = jiraBaseUrl ? `${jiraBaseUrl}/browse/${encodeURIComponent(issue.issue_key)}` : '#';
+        const statusText = issue.status === 'Ready' ? `<span class="ready-status-tag">(Ready)</span>` : `(${escapeHtml(issue.status)})`;
+        return `<div class="ready-issue-item"><a class="ready-issue-link" href="${issueUrl}" target="_blank" rel="noopener noreferrer">${issue.issue_key}</a> - ${escapeHtml(issue.issue_summary)} ${statusText}</div>`;
+      })
+      .join('');
+  };
+
+  const buildReadyTableHtml = () => {
+    if (!readyIssues.length) {
+      return '';
+    }
+
+    const rows = readyIssues
+      .map((issue) => {
+        const issueUrl = jiraBaseUrl ? `${jiraBaseUrl}/browse/${encodeURIComponent(issue.issue_key)}` : '#';
+        return `
+        <tr>
+          <td><a class="ready-issue-link" href="${issueUrl}" target="_blank" rel="noopener noreferrer">${issue.issue_key}</a></td>
+          <td>${escapeHtml(issue.issue_summary)}</td>
+          <td><a href="${issueUrl}" target="_blank" rel="noopener noreferrer" class="btn-go">GO</a></td>
+        </tr>
+      `;
+      })
+      .join('');
+
+    return `
+      <table class="ready-issues-table">
+        <thead>
+          <tr>
+            <th>Issue</th>
+            <th>Summary</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows}
+        </tbody>
+      </table>
+    `;
+  };
+
+  if (readyIdsList) {
+    readyIdsList.innerHTML = '';
+  }
+
+  if (readyIdsTableContainer) {
+    readyIdsTableContainer.innerHTML = buildReadyTableHtml();
+  }
+
+  if (readyListSection) {
+    readyListSection.style.display = 'none';
+  }
+
+  const readySummaryCard = document.getElementById('readySummaryCard');
+  if (readySummaryCard) {
+    readySummaryCard.onclick = () => {
+      if (!readyListSection) return;
+      const isHidden = readyListSection.style.display === 'none' || readyListSection.style.display === '';
+      readyListSection.style.display = isHidden ? 'block' : 'none';
+    };
+  }
 
   // Display exceptions
   if (exceptions.length === 0) {
