@@ -1088,6 +1088,89 @@ main {
   align-items: start;
 }
 
+.ready-list-header {
+  color: #227d32;
+  font-size: 1.1rem;
+  margin-bottom: 0.75rem;
+  font-weight: 700;
+}
+
+.ready-issue-item {
+  margin-bottom: 0.5rem;
+}
+
+.ready-issue-link {
+  display: inline-block;
+  color: #0a66c2;
+  text-decoration: none;
+  font-weight: 600;
+  border-bottom: 1px dotted #0a66c2;
+}
+
+.ready-issue-link:hover {
+  color: #004080;
+  text-decoration: underline;
+}
+
+.ready-status-tag {
+  color: #2e7d32;
+  font-weight: 700;
+}
+
+.no-ready {
+  color: #666;
+  font-style: italic;
+}
+
+#epicNameLabel {
+  color: #ffffff;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  margin-left: 0.5rem;
+}
+
+.ready-issues-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.75rem;
+  font-size: 0.95rem;
+}
+
+.ready-issues-table th,
+.ready-issues-table td {
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  padding: 0.6rem 0.75rem;
+  text-align: left;
+}
+
+.ready-issues-table th {
+  background-color: rgba(76, 175, 80, 0.08);
+  color: #1d5d2b;
+}
+
+#epicNameLabel {
+  color: #0072ce !important;
+  font-weight: 600;
+}
+
+.btn-go {
+  display: inline;
+  background: transparent;
+  color: #4caf50;
+  padding: 0;
+  border-radius: 0;
+  text-decoration: none;
+  font-weight: 400;
+  cursor: text;
+  transition: none;
+}
+
+.btn-go:hover {
+  color: #4caf50;
+  text-decoration: none;
+  background: transparent;
+}
+
 .exceptions-header {
   color: var(--primary-blue);
   font-size: 1.1rem;
