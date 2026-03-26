@@ -420,6 +420,7 @@ PASSING_PHRASES = (
     "yes",
     "no cfa",
     "no one page",
+    "no new one page",
     "Zebra Confluence",
     "- zebra confluence",
     "no impact",
