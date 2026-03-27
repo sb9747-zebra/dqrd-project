@@ -423,6 +423,7 @@ PASSING_PHRASES = (
     "na",
     "yes",
     "no cfa",
+    "no new cfa",
     "no one page",
     "no new one page",
     "Zebra Confluence",
