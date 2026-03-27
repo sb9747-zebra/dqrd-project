@@ -452,6 +452,8 @@ FAILING_PHRASES = (
 
 PASS_METRIC_SPLIT_RE = _re.compile(r"\s*(?:/|,|;|\bor\b|\n)\s*", _re.IGNORECASE)
 TICKET_REF_RE = _re.compile(r"^[A-Z][A-Z0-9]+-\d+$")
+# Pattern for non-dashed ticket references like TC58, DQRD7063, etc.
+TICKET_REF_NODASH_RE = _re.compile(r"^[A-Z]{1,4}\d{2,}$")
 THRESHOLD_RE = _re.compile(r"([<>]=?|=)\s*([0-9]*\.?[0-9]+)")
 
 
@@ -772,9 +774,17 @@ def _matches_pass_metric(pass_metric: str, actual_status: str) -> tuple[bool, st
     # Check if actual_status is a ticket reference (general case)
     normalized_status = _normalize_text(actual_status)
     if TICKET_REF_RE.fullmatch(normalized_status):
-        # Other ticket references require "ticket created" in metric
-        if any("ticket created" in value for value in metric_values):
-            return True, "Ticket reference satisfies ticket-created metric"
+        # Bare ticket references (e.g., TC-52, JIRA-123) are always valid/approved
+        return True, "Bare ticket reference is valid and approved"
+    
+    # Also handle ticket references with optional colon suffix (e.g., TC-52:, JIRA-123:)
+    ticket_like = _re.sub(r":?\s*$", "", normalized_status)
+    if TICKET_REF_RE.fullmatch(ticket_like) and ticket_like != "":
+        return True, "Bare ticket reference is valid and approved"
+    
+    # Handle non-dashed ticket references (e.g., TC58:, DQRD7063)
+    if TICKET_REF_NODASH_RE.fullmatch(ticket_like) and ticket_like != "":
+        return True, "Bare ticket reference is valid and approved"
 
     # Check for explicit numeric thresholds (e.g. ">= 800")
     threshold_match = THRESHOLD_RE.search(_normalize_text(pass_metric).replace(" ", ""))
@@ -893,6 +903,24 @@ def analyze_issue_readiness(
             continue
 
         row_name = _pick_row_name(row, status_key, pass_metric_key)
+
+        # Add explicit exception for rows with a status column but empty status value.
+        if status_key and not actual_status:
+            status_reason = "Missing status in table"
+            if pass_metric:
+                status_reason += f" (expected: {pass_metric})"
+            exceptions.append(
+                ReadinessRowException(
+                    issue_key=issue_key,
+                    issue_summary=issue_summary,
+                    context=_normalize_text(context_text),
+                    row_name=row_name,
+                    pass_metric=pass_metric or "(no pass metric column)",
+                    actual_status=actual_status or "(blank- Status missing)",
+                    reason=status_reason,
+                )
+            )
+            continue
 
         if pass_metric_key and status_key:
             is_match, reason = _matches_pass_metric(pass_metric, actual_status)

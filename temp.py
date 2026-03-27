@@ -894,6 +894,24 @@ def analyze_issue_readiness(
 
         row_name = _pick_row_name(row, status_key, pass_metric_key)
 
+        # Add explicit exception for rows with a status column but empty status value.
+        if status_key and not actual_status:
+            status_reason = "Missing status in table"
+            if pass_metric:
+                status_reason += f" (expected: {pass_metric})"
+            exceptions.append(
+                ReadinessRowException(
+                    issue_key=issue_key,
+                    issue_summary=issue_summary,
+                    context=_normalize_text(context_text),
+                    row_name=row_name,
+                    pass_metric=pass_metric or "(no pass metric column)",
+                    actual_status=actual_status or "(blank- Status missing)",
+                    reason=status_reason,
+                )
+            )
+            continue
+
         if pass_metric_key and status_key:
             is_match, reason = _matches_pass_metric(pass_metric, actual_status)
             if not is_match:
