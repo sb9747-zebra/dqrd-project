@@ -452,6 +452,8 @@ FAILING_PHRASES = (
 
 PASS_METRIC_SPLIT_RE = _re.compile(r"\s*(?:/|,|;|\bor\b|\n)\s*", _re.IGNORECASE)
 TICKET_REF_RE = _re.compile(r"^[A-Z][A-Z0-9]+-\d+$")
+# Pattern for non-dashed ticket references like TC58, DQRD7063, etc.
+TICKET_REF_NODASH_RE = _re.compile(r"^[A-Z]{1,4}\d{2,}$")
 THRESHOLD_RE = _re.compile(r"([<>]=?|=)\s*([0-9]*\.?[0-9]+)")
 
 
@@ -739,6 +741,13 @@ def _matches_pass_metric(pass_metric: str, actual_status: str) -> tuple[bool, st
     if normalized_actual in metric_values:
         return True, "Exact pass metric match"
 
+    # Special case: answer of "No" can satisfy no-change / NA expectations.
+    if normalized_actual == "no" and any(
+        value.startswith("no") or value in {"na", "n/a", "not applicable"}
+        for value in metric_values
+    ):
+        return True, "No status satisfies no-change/NA pass metric"
+
     # Treat status variants like MV2 as equivalent to MV when MV is an acceptable pass metric.
     base_actual = _re.sub(r"\d+$", "", normalized_actual)
     if base_actual and base_actual != normalized_actual and base_actual in metric_values:
@@ -772,9 +781,17 @@ def _matches_pass_metric(pass_metric: str, actual_status: str) -> tuple[bool, st
     # Check if actual_status is a ticket reference (general case)
     normalized_status = _normalize_text(actual_status)
     if TICKET_REF_RE.fullmatch(normalized_status):
-        # Other ticket references require "ticket created" in metric
-        if any("ticket created" in value for value in metric_values):
-            return True, "Ticket reference satisfies ticket-created metric"
+        # Bare ticket references (e.g., TC-52, JIRA-123) are always valid/approved
+        return True, "Bare ticket reference is valid and approved"
+    
+    # Also handle ticket references with optional colon suffix (e.g., TC-52:, JIRA-123:)
+    ticket_like = _re.sub(r":?\s*$", "", normalized_status)
+    if TICKET_REF_RE.fullmatch(ticket_like) and ticket_like != "":
+        return True, "Bare ticket reference is valid and approved"
+    
+    # Handle non-dashed ticket references (e.g., TC58:, DQRD7063)
+    if TICKET_REF_NODASH_RE.fullmatch(ticket_like) and ticket_like != "":
+        return True, "Bare ticket reference is valid and approved"
 
     # Check for explicit numeric thresholds (e.g. ">= 800")
     threshold_match = THRESHOLD_RE.search(_normalize_text(pass_metric).replace(" ", ""))
